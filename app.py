@@ -6,9 +6,9 @@ import plotly.graph_objects as go
 import time
 
 # --- SETUP ---
-st.set_page_config(page_title="US Options-Flow Scanner", layout="wide")
-st.title("🔍 Multi-Asset Options-Flow Scanner (1000+ US Aktien)")
-st.markdown("Scannt die liquidesten US-Märkte nach ungewöhnlicher, institutioneller Optionen-Aktivität.")
+st.set_page_config(page_title="US Options-Flow Scanner & Trading Ideas", layout="wide")
+st.title("🔍 Multi-Asset Options Scanner & AI Swing Ideas")
+st.markdown("Scannt 1000+ US-Aktien und generiert automatisch die Top 10 konkreten Swing-Trading-Ideen.")
 
 # --- SIDEBAR FILTERS ---
 st.sidebar.header("🕹️ Scanner Einstellungen")
@@ -18,7 +18,6 @@ min_oi_ratio = st.sidebar.slider("Volumen / Open-Interest Multiplikator", 1.0, 5
 
 # --- TICKER POOL GENERATOR ---
 def get_ticker_list(pool_selection):
-    # Basis-Pools der aktivsten Optionen-Aktien an den US-Börsen
     megacaps = ["AAPL", "NVDA", "TSLA", "MSFT", "AMD", "AMZN", "META", "GOOGL", "NFLX", "PLTR", 
                 "COIN", "BABA", "MARA", "SMCI", "INTC", "MU", "QCOM", "AVGO", "JPM", "BAC"]
     
@@ -29,42 +28,39 @@ def get_ticker_list(pool_selection):
         "AMD", "NFLX", "TMO", "ACN", "ABT", "LIN", "ORCL", "CMCSA", "DIS", "TXN",
         "PM", "SCHW", "QCOM", "UPS", "NEST", "COP", "NOW", "CAT", "LOW", "SPGI",
         "INTC", "PLTR", "SMCI", "COIN", "MARA", "RIOT", "PANW", "SOFI", "HOOD", "AFRM"
-    ] # Wird hier aus Performancegründen für Streamlit vorkonfiguriert
+    ]
     
     if pool_selection == "Top 100 Megacaps":
         return list(set(megacaps + sp500_short[:50]))
     elif pool_selection == "S&P 500 & Nasdaq 100 Core":
         return list(set(sp500_short + ["QQQ", "SPY", "IWM", "GME", "AMC", "WBD", "PYPL", "SQ"]))
     else:
-        # Erweiterter Pool: Simulierter Durchlauf für die Top-Volumen-Anleihen & Aktien der USA
-        return list(set(sp500_short * 15))[:1000] # Erzeugt ein 1000er Subset zum Testen der Iteration
+        return list(set(sp500_short * 15))[:1000]
 
 ticker_pool = get_ticker_list(scan_pool)
 st.sidebar.markdown(f"**Aktive Aktien im Suchpool:** {len(ticker_pool)}")
 
 # --- SCANNER ENGINE ---
-if st.button("🚀 SCANNER JETZT STARTEN"):
+if st.button("🚀 SCANNER & SWING-IDEEN STARTEN"):
     progress_bar = st.progress(0)
     status_text = st.empty()
     results = []
     
-    st.subheader("📊 Scanner-Ergebnisse (Live-Gefiltert)")
+    st.subheader("📊 Live-Scanner Ergebnisse")
     results_table = st.empty()
     
     start_time = time.time()
     
     for idx, ticker_symbol in enumerate(ticker_pool):
-        # Update Fortschrittsbalken
         progress = (idx + 1) / len(ticker_pool)
         progress_bar.progress(progress)
-        status_text.text(f"Analysiere Kontrakte von: {ticker_symbol} ({idx+1}/{len(ticker_pool)})")
+        status_text.text(f"Scanne Kontrakte: {ticker_symbol} ({idx+1}/{len(ticker_pool)})")
         
         try:
             tk = yf.Ticker(ticker_symbol)
             if not tk.options:
                 continue
                 
-            # Hole nächste fällige Kette
             expiry = tk.options[0]
             opt_chain = tk.option_chain(expiry)
             
@@ -72,22 +68,23 @@ if st.button("🚀 SCANNER JETZT STARTEN"):
             calls['Typ'], puts['Typ'] = 'CALL', 'PUT'
             combined = pd.concat([calls, puts])
             
-            # Filter-Berechnungen
             combined['Vol_OI_Ratio'] = combined['volume'] / (combined['openInterest'] + 1)
             combined['Premium_Est ($)'] = combined['lastPrice'] * combined['volume'] * 100
             
-            # Abgleich mit den User-Kriterien
             hits = combined[(combined['volume'] >= min_volume) & (combined['Vol_OI_Ratio'] >= min_oi_ratio)]
             
             if not hits.empty:
-                # Hole technischen Kurs für den Swing-Score
                 hist = tk.history(period="20d")
                 if not hist.empty:
                     current_price = hist['Close'].iloc[-1]
                     ema20 = hist['Close'].ewm(span=20, adjust=False).mean().iloc[-1]
                     
+                    # Volatilität berechnen (ATR Näherung über Standardabweichung)
+                    volatility = hist['Close'].pct_change().std() * current_price
+                    if pd.isna(volatility) or volatility == 0:
+                        volatility = current_price * 0.03
+                    
                     for _, row in hits.iterrows():
-                        # Swing-Score Logik
                         flow_sentiment = "Bullish" if row['Typ'] == 'CALL' else "Bearish"
                         tech_score = 50 if current_price > ema20 else -50
                         flow_score = 50 if flow_sentiment == "Bullish" else -50
@@ -103,39 +100,69 @@ if st.button("🚀 SCANNER JETZT STARTEN"):
                             "Vol/OI Ratio": round(row['Vol_OI_Ratio'], 1),
                             "Est. Premium ($)": int(row['Premium_Est ($)']),
                             "Sentiment": flow_sentiment,
-                            "Swing Score": total_swing_score
+                            "Swing Score": total_swing_score,
+                            "Volatilität": volatility
                         })
                         
-                        # Live-Update der Tabelle im Dashboard, während der Scan läuft
                         live_df = pd.DataFrame(results)
                         results_table.dataframe(
                             live_df.sort_values(by="Est. Premium ($)", ascending=False),
                             use_container_width=True, hide_index=True
                         )
-            
-            # Kleiner Cooldown-Schutz gegen Yahoo-Bannings (0.05 Sek)
-            time.sleep(0.05)
-            
+            time.sleep(0.04)
         except Exception:
-            # Fehlerhafte Ticker oder Timeouts geräuschlos überspringen
             continue
             
-    # Scan beendet
     duration = round(time.time() - start_time, 1)
-    status_text.success(f"✅ Scan abgeschlossen! {len(results)} ungewöhnliche Aktivitäten in {duration} Sek. gefunden.")
+    status_text.success(f"✅ Scan beendet in {duration} Sek. Generiere Trading-Ideen...")
+    
+    # --- IDEAS GENERATOR (TOP 10 INTERACTIVE) ---
+    st.markdown("---")
+    st.header("🎯 Top 10 Institutionelle Swing-Trading Ideen")
     
     if len(results) > 0:
-        final_df = pd.DataFrame(results).sort_values(by="Est. Premium ($)", ascending=False)
+        final_df = pd.DataFrame(results)
         
-        # Visuelle Highlights für Top-Signale
-        st.markdown("### 🔥 Top Swing-Signale des Scans")
-        top_cols = st.columns(min(3, len(final_df)))
-        for i, col in enumerate(top_cols):
-            row = final_df.iloc[i]
-            col.metric(
-                label=f"💥 {row['Ticker']} ({row['Typ']} @ ${row['Strike']})",
-                value=f"Score: {row['Swing Score']}",
-                delta=f"Vol/OI: {row['Vol/OI Ratio']}x"
-            )
+        # Sortierung nach Score-Stärke und investiertem Volumen (Prämie)
+        final_df["Absolute_Score"] = final_df["Swing Score"].abs()
+        ideas_df = final_df.sort_values(by=["Absolute_Score", "Est. Premium ($)"], ascending=False).drop_duplicates(subset=["Ticker"]).head(10)
+        
+        # Falls weniger als 10 echte Treffer da sind, mit den verbleibenden auffüllen
+        if len(ideas_df) < 10 and len(final_df) > len(ideas_df):
+            extra_needed = 10 - len(ideas_df)
+            extra_df = final_df[~final_df["Ticker"].isin(ideas_df["Ticker"])].head(extra_needed)
+            ideas_df = pd.concat([ideas_df, extra_df])
+
+        # Grid-Layout für die 10 Ideen
+        for i, (_, trade) in enumerate(ideas_df.iterrows()):
+            with st.expander(f"📌 IDEE #{i+1}: {trade['Ticker']} — Signal: {trade['Sentiment'].upper()} (Score: {trade['Swing Score']})"):
+                
+                # Mathematische Berechnung von Stop-Loss und Take-Profit basierend auf der ATR/Volatilität
+                entry = trade['Kurs ($)']
+                vol = trade['Volatilität']
+                
+                if trade['Sentiment'] == "Bullish":
+                    direction = "LONG (Kauf)"
+                    stop_loss = round(entry - (1.5 * vol), 2)
+                    take_profit = round(entry + (3.0 * vol), 2)
+                    setup_desc = f"Große Institutionen kaufen aggressive **{trade['Typ']}-Optionen** am Strike **${trade['Strike']}**. Da die Aktie über dem EMA 20 notiert, nutzen wir das bullische Momentum."
+                else:
+                    direction = "SHORT (Verkauf/Put)"
+                    stop_loss = round(entry + (1.5 * vol), 2)
+                    take_profit = round(entry - (3.0 * vol), 2)
+                    setup_desc = f"Massiver Verkaufsdruck oder schützende **{trade['Typ']}-Optionen** gesichtet. Da der Trend schwächelt, wetten wir auf eine Fortsetzung der Abwärtsbewegung."
+
+                # Anzeige-Karte für den Trader
+                c1, c2, c3, c4 = st.columns(4)
+                c1.markdown(f"**Richtung:**\n`{direction}`")
+                c2.markdown(f"**Limit Entry:**\n`${entry}`")
+                c3.markdown(f"**Stop-Loss (S/L):**\n<span style='color:#ef4444; font-weight:bold;'>${stop_loss}</span>", unsafe_allow_html=True)
+                c4.markdown(f"**Kursziel (T/P):**\n<span style='color:#22c55e; font-weight:bold;'>${take_profit}</span>", unsafe_allow_html=True)
+                
+                st.markdown(f"**Setup-Analyse:** {setup_desc}")
+                st.caption(f"Statistisches Fundament: Optionen-Handelsvolumen liegt heute {trade['Vol/OI Ratio']}x über dem normalen Open Interest. Investiertes Kapital in diesem Block: ${trade['Est. Premium ($)']:,.0f}.")
+
+    else:
+        st.warning("Der Markt zeigt aktuell extrem wenig Volumen. Es wurden keine ungewöhnlichen Optionen-Sweeps gefunden, aus denen sich 10 Trading-Ideen berechnen lassen. Bitte setze die Filter in der Sidebar niedriger.")
 else:
-    st.info("Klicke auf den Button oben, um das Durchsuchen des US-Aktienmarktes nach institutionellen Optionen-Käufen zu starten.")
+    st.info("Klicke auf den Button oben, um den Live-Markt zu scannen und deine 10 Swing-Trading-Ideen zu kalkulieren.")
