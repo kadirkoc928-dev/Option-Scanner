@@ -83,15 +83,16 @@ flow_data, live_price = get_real_options_flow(ticker_input)
 ticker_obj = yf.Ticker(ticker_input)
 hist_prices = ticker_obj.history(period="60d", interval="1d")
 
-if not flow_data.empty and live_price > 0:
+if not hist_prices.empty and live_price > 0:
     
     # --- CALCULATE REAL SWING SCORE ---
-    bull_vol = flow_data[flow_data["Sentiment"] == "Bullish"]["Premium_Est ($)"].sum()
-    bear_vol = flow_data[flow_data["Sentiment"] == "Bearish"]["Premium_Est ($)"].sum()
-    total_vol = bull_vol + bear_vol
-    
-    # Optionen-Komponente (-100 bis +100)
-    flow_score = ((bull_vol - bear_vol) / total_vol * 100) if total_vol > 0 else 0
+    if not flow_data.empty:
+        bull_vol = flow_data[flow_data["Sentiment"] == "Bullish"]["Premium_Est ($)"].sum()
+        bear_vol = flow_data[flow_data["Sentiment"] == "Bearish"]["Premium_Est ($)"].sum()
+        total_vol = bull_vol + bear_vol
+        flow_score = ((bull_vol - bear_vol) / total_vol * 100) if total_vol > 0 else 0
+    else:
+        flow_score = 0
     
     # Technische Komponente (EMA 20)
     ema20 = hist_prices['Close'].ewm(span=20, adjust=False).mean().iloc[-1]
@@ -130,13 +131,17 @@ if not flow_data.empty and live_price > 0:
         st.subheader("🚨 Ungewöhnlicher Optionen-Flow (Live)")
         st.markdown("*Gefiltert nach Kontrakten, deren heutiges Volumen das Open Interest übersteigt:*")
         
-        def color_rows(val):
-            return 'color: #22c55e; font-weight: bold;' if val == "Bullish" else 'color: #ef4444; font-weight: bold;'
+        if not flow_data.empty:
+            def color_rows(val):
+                return 'color: #22c55e; font-weight: bold;' if val == "Bullish" else 'color: #ef4444; font-weight: bold;'
+                
+            output_df = flow_data[["Strike", "Typ", "Volumen", "Open Interest", "Premium_Est ($)", "Sentiment"]]
             
-        output_df = flow_data[["Strike", "Typ", "Volumen", "Open Interest", "Premium_Est ($)", "Sentiment"]]
-        styled_output = output_df.style.applymap(color_rows, subset=['Sentiment']).format({"Premium_Est ($)": "{:,.0f}"})
-        
-        st.dataframe(styled_output, height=400, use_container_width=True, hide_index=True)
+            # HIER WAR DER FEHLER: .applymap() wurde durch .map() ersetzt
+            styled_output = output_df.style.map(color_rows, subset=['Sentiment']).format({"Premium_Est ($)": "{:,.0f}"})
+            st.dataframe(styled_output, height=400, use_container_width=True, hide_index=True)
+        else:
+            st.info("Aktuell keine ungewöhnlichen Optionen-Aktivitäten mit diesen Filtereinstellungen gefunden. Versuche, die Regler links etwas niedriger zu stellen.")
 
 else:
-    st.info("Suche nach ungewöhnlichem Optionen-Flow... Verringere die Filter-Schieberegler in der Sidebar, falls für diesen Basiswert aktuell keine extremen Ausreißer im Handelsvolumen vorliegen.")
+    st.error("Fehler beim Laden der historischen Kursdaten.")
